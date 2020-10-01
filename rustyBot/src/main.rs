@@ -56,7 +56,7 @@ struct General;
 #[tokio::main]
 async fn main() {
     // Configure the client with your Discord bot token in the environment.
-    let token = "YOURDISCORDTOKENHERE";
+    let token = "YOURTOKENHERE";
 
     let framework = StandardFramework::new()
         .configure(|c| c
@@ -178,40 +178,6 @@ async fn leave(ctx: &Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-#[command]
-async fn mute(ctx: &Context, msg: &Message) -> CommandResult {
-    let guild_id = match ctx.cache.guild_channel_field(msg.channel_id, |channel| channel.guild_id).await {
-        Some(id) => id,
-        None => {
-            check_msg(msg.channel_id.say(&ctx.http, "DMs not supported").await);
-
-            return Ok(());
-        },
-    };
-
-    let manager_lock = ctx.data.read().await
-        .get::<VoiceManager>().cloned().expect("Expected VoiceManager in TypeMap.");
-    let mut manager = manager_lock.lock().await;
-
-    let handler = match manager.get_mut(guild_id) {
-        Some(handler) => handler,
-        None => {
-            check_msg(msg.reply(ctx, "Not in a voice channel").await);
-
-            return Ok(());
-        },
-    };
-
-    if handler.self_mute {
-        check_msg(msg.channel_id.say(&ctx.http, "Already muted").await);
-    } else {
-        handler.mute(true);
-
-        check_msg(msg.channel_id.say(&ctx.http, "Now muted").await);
-    }
-
-    Ok(())
-}
 
 #[command]
 async fn ping(context: &Context, msg: &Message) -> CommandResult {
@@ -272,84 +238,44 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     Ok(())
 }
 
-#[command]
-async fn undeafen(ctx: &Context, msg: &Message) -> CommandResult {
-    let guild_id = match ctx.cache.guild_channel_field(msg.channel_id, |channel| channel.guild_id).await {
-        Some(id) => id,
-        None => {
-            check_msg(msg.channel_id.say(&ctx.http, "Error finding channel info").await);
 
-            return Ok(());
-        },
-    };
-
-    let manager_lock = ctx.data.read().await
-        .get::<VoiceManager>().cloned().expect("Expected VoiceManager in TypeMap.");
-    let mut manager = manager_lock.lock().await;
-
-    if let Some(handler) = manager.get_mut(guild_id) {
-        handler.deafen(false);
-
-        check_msg(msg.channel_id.say(&ctx.http, "Undeafened").await);
-    } else {
-        check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel to undeafen in").await);
-    }
-
-    Ok(())
-}
-
-#[command]
-async fn unmute(ctx: &Context, msg: &Message) -> CommandResult {
-    let guild_id = match ctx.cache.guild_channel_field(msg.channel_id, |channel| channel.guild_id).await {
-        Some(id) => id,
-        None => {
-            check_msg(msg.channel_id.say(&ctx.http, "Error finding channel info").await);
-
-            return Ok(());
-        },
-    };
-    let manager_lock = ctx.data.read().await
-        .get::<VoiceManager>().cloned().expect("Expected VoiceManager in TypeMap.");
-    let mut manager = manager_lock.lock().await;
-
-    if let Some(handler) = manager.get_mut(guild_id) {
-        handler.mute(false);
-
-        check_msg(msg.channel_id.say(&ctx.http, "Unmuted").await);
-    } else {
-        check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel to unmute in").await);
-    }
-
-    Ok(())
-}
-fn crop_letters(s: &str, pos: usize) -> &str {
-    match s.char_indices().skip(pos).next() {
-        Some((pos, _)) => &s[pos..],
-        None => "",
-    }
-}
 
 
 #[command]
-async fn say(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
-
-
-
-
-    let guild_id = match ctx.cache.guild_channel(msg.channel_id).await {
-        Some(channel) => channel.guild_id,
+async fn say(ctx: &Context, msg: &Message, _args: Args) -> CommandResult {
+    let guild = match msg.guild(&ctx.cache).await {
+        Some(guild) => guild,
         None => {
-            check_msg(msg.channel_id.say(&ctx.http, "Error finding channel info").await);
+            check_msg(msg.channel_id.say(&ctx.http, "DMs not supported").await);
 
             return Ok(());
-        },
+        }
     };
+
+    let guild_id = guild.id;
     let message : &str = crop_letters(msg.content.as_str(),4);
     save_to_file(message, "test.opus");
+    let channel_id = guild
+        .voice_states.get(&msg.author.id)
+        .and_then(|voice_state| voice_state.channel_id);
 
-    let manager_lock = ctx.data.read().await
-        .get::<VoiceManager>().cloned().expect("Expected VoiceManager in TypeMap.");
+    let connect_to = match channel_id {
+        Some(channel) => channel,
+        None => {
+            check_msg(msg.reply(ctx, "Not in a voice channel").await);
+
+            return Ok(());
+        }
+    };
+
+    let manager_lock = ctx.data.read().await.get::<VoiceManager>().cloned().expect("Expected VoiceManager in TypeMap.");
     let mut manager = manager_lock.lock().await;
+
+    if manager.join(guild_id, connect_to).is_some() {
+        connect_to.mention();
+    } else {
+        check_msg(msg.channel_id.say(&ctx.http, "Error joining the channel").await);
+    }
 
       if let Some(handler) = manager.get_mut(guild_id) {
         let source = match ffmpeg("test.opus").await {
@@ -365,7 +291,6 @@ async fn say(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 
         handler.play(source);
 
-        check_msg(msg.channel_id.say(&ctx.http, "said your message").await);
     } else {
         check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel to play in").await);
     }
@@ -378,6 +303,5 @@ fn check_msg(result: SerenityResult<Message>) {
         println!("Error sending message: {:?}", why);
     }
 }
-
 
 
